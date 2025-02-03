@@ -13,10 +13,6 @@ jobs:
   nip-proxy:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: .
-
     steps:
       - uses: actions/checkout@v4
 
@@ -27,16 +23,17 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
-        run: docker build ./services/nip-proxy -t eu.gcr.io/hoppipolla/nip-proxy:${{ github.sha }}
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/nip-proxy/Dockerfile
+          push: true
+          tags: eu.gcr.io/hoppipolla/nip-proxy:${{ github.sha }}
 
   path-analyzer:
     runs-on: ubuntu-latest
 
-    defaults:
-      run:
-        working-directory: .
-
     steps:
       - uses: actions/checkout@v4
 
@@ -47,15 +44,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
-        run: docker build ./services/path-analyzer -t eu.gcr.io/hoppipolla/path-analyzer:${{ github.sha }}
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/path-analyzer/Dockerfile
+          push: true
+          tags: hoppipolla/path-analyzer:${{ github.sha }}
 
   policy-manager:
     runs-on: ubuntu-latest
-
-    defaults:
-      run:
-        working-directory: .
 
     steps:
       - uses: actions/checkout@v4
@@ -71,5 +69,10 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build Docker image
-        run: docker build ./services/policy-manager -t eu.gcr.io/hoppipolla/policy-manager:${{ github.sha }}
+      - name: Build and Push Docker Image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: services/policy-manager/Dockerfile
+          push: true
+          tags: eu.gcr.io/hoppipolla/policy-manager:${{ github.sha }}
