@@ -5,7 +5,9 @@ services:
       dockerfile: services/path-analyzer/Dockerfile
     container_name: path-analyzer
     depends_on:
-      - policy-manager
+      policy-manager:
+        condition: service_started
+        restart: true
     environment:
       - HOST=${HOPPIPOLLA_PATH_ANALYZER_HOST:-127.0.0.1}
       - PORT=${HOPPIPOLLA_PATH_ANALYZER_PORT:-27001}
@@ -24,8 +26,12 @@ services:
       dockerfile: services/policy-manager/Dockerfile
     container_name: policy-manager
     depends_on:
-      - policy-manager_db
-      - nip-proxy
+      policy-manager_db:
+        condition: service_healthy
+        restart: true
+      nip-proxy:
+        condition: service_started
+        restart: true
     environment:
       - HOST=${HOPPIPOLLA_POLICY_MANAGER_HOST:-localhost}
       - PORT=${HOPPIPOLLA_POLICY_MANAGER_PORT:-27002}
