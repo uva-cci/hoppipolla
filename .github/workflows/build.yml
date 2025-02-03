@@ -29,7 +29,7 @@ jobs:
           context: .
           file: services/nip-proxy/Dockerfile
           push: true
-          tags: eu.gcr.io/hoppipolla/nip-proxy:${{ github.sha }}
+          tags: eu.ghcr.io/hoppipolla/nip-proxy:${{ github.sha }}
 
   path-analyzer:
     runs-on: ubuntu-latest
@@ -50,7 +50,7 @@ jobs:
           context: .
           file: services/path-analyzer/Dockerfile
           push: true
-          tags: hoppipolla/path-analyzer:${{ github.sha }}
+          tags: eu.ghcr.io/hoppipolla/path-analyzer:${{ github.sha }}
 
   policy-manager:
     runs-on: ubuntu-latest
@@ -75,4 +75,4 @@ jobs:
           context: .
           file: services/policy-manager/Dockerfile
           push: true
-          tags: eu.gcr.io/hoppipolla/policy-manager:${{ github.sha }}
+          tags: eu.ghcr.io/hoppipolla/policy-manager:${{ github.sha }}
