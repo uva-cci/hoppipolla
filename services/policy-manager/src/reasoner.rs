@@ -55,6 +55,13 @@ deactivate(P) :- overrides(_, P).
 #show deactivate/1.
 ";
 
+/// Finds `n_models` viable paths, where viability is here defined as satisfying
+/// requirements and maximizing satisfaction of preferences expressed in the provided
+/// policies.
+///
+/// If a `metapolicy` is provided, in the case of conflict detection (i.e. two
+/// policies have an empty intersection of their solutions sets), it will be used
+/// to try and override at least one policy for each conflict.
 pub fn solve(
     pi: &ProblemInstance,
     policies: Vec<Policy>,
@@ -197,58 +204,45 @@ pub enum MetadataValue {
     Categorical(String),
 }
 
+/// A generic feture name - value pair
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub struct Metadata {
+    /// Name of the metadata feature
     pub name: String,
+    /// Metadata value associated to a link (e.g., bandwidth)
     pub value: MetadataValue,
 }
 
+/// Represents a link between two AS nodes in the network.
+/// It includes network interfaces and optional metadata.
 #[derive(Debug, Eq, Clone)]
 pub struct Link {
+    /// Start AS node (i.e., in SCION an ISD-AS tuple)
     pub as_a: String,
+    /// Start network interface (usually a number)
     pub if_a: String,
+    /// End AS node (i.e., in SCION an ISD-AS tuple)
     pub as_b: String,
+    /// End network interface (usually a number)
     pub if_b: String,
+    /// Optional metadata associated to the link (e.g., bandwidth)
     pub meta: Option<Vec<Metadata>>,
 }
 
-impl From<pb::Link> for Link {
-    fn from(value: pb::Link) -> Self {
-        Link {
-            as_a: value.as_a,
-            if_a: value.if_a,
-            as_b: value.as_b,
-            if_b: value.if_b,
-            meta: None,
-        }
-    }
-}
-
-impl PartialEq for Link {
-    fn eq(&self, other: &Self) -> bool {
-        self.as_a == other.as_a
-            && self.if_a == other.if_a
-            && self.as_b == other.as_b
-            && self.if_b == other.if_b
-    }
-}
-
-impl Hash for Link {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.as_a.hash(state);
-        self.if_a.hash(state);
-        self.as_b.hash(state);
-        self.as_b.hash(state);
-    }
-}
-
+/// Represents some global metadata for the path search that does not pertain
+/// to a specific link but to some optional subject `subj`.
 #[derive(Debug)]
 pub struct GlobalMetadata {
+    /// Name of the metadata feature
     pub name: String,
+    /// Optional subject to which the feature pertains
     pub subj: Option<String>,
+    /// Metadata associated to the subject or generic to the network (e.g. coordinates of a border router)
     pub value: MetadataValue,
 }
 
+/// Contains the data required to solve a path search problem.
+/// It can populate a `clingo::FactBase` with the necessary atoms.
 #[derive(Debug)]
 pub struct ProblemInstance {
     pub src: String,
@@ -257,28 +251,9 @@ pub struct ProblemInstance {
     pub meta: Vec<GlobalMetadata>,
 }
 
-fn populate_global_metadata(fb: &mut FactBase, data: &GlobalMetadata) -> Result<(), ClingoError> {
-    let mut args = match &data.subj {
-        Some(subj) => vec![Symbol::create_string(subj)?],
-        None => Vec::new(),
-    };
-
-    match &data.value {
-        MetadataValue::Boolean(v) => fb.insert(&Symbol::create_function(&data.name, &args, *v)?),
-        MetadataValue::Numerical(v) => {
-            args.push(Symbol::create_number(*v));
-            fb.insert(&Symbol::create_function(&data.name, &args, true)?)
-        }
-        MetadataValue::Categorical(v) => {
-            args.push(Symbol::create_string(v)?);
-            fb.insert(&Symbol::create_function(&data.name, &args, true)?)
-        }
-    }
-
-    Ok(())
-}
-
 impl ProblemInstance {
+    /// Add the ASP symbols for the base path search and provided metadata
+    /// to a `clingo::FactBase` struct.
     fn populate(&self, fb: &mut FactBase) -> Result<(), ClingoError> {
         fb.insert(&Symbol::create_function(
             SYMBOL_SRC,
@@ -332,31 +307,8 @@ impl ProblemInstance {
     }
 }
 
-fn reconstruct_path(src: &str, dst: &str, symbols: Vec<Symbol>) -> Result<Vec<Link>, ClingoError> {
-    let mut out = Vec::with_capacity(symbols.len());
-    let mut cur_node: Cow<str> = src.into();
-    while cur_node.as_ref() != dst {
-        for symbol in symbols
-            .iter()
-            .filter(|s| s.name().expect("failed to extract symbol name") == SYMBOL_CHOSEN)
-        {
-            let args = symbol.arguments()?;
-            let link = Link {
-                as_a: args[0].string()?.to_owned(),
-                if_a: args[1].string()?.to_owned(),
-                as_b: args[2].string()?.to_owned(),
-                if_b: args[3].string()?.to_owned(),
-                meta: None,
-            };
-            if link.as_a == cur_node {
-                cur_node = link.as_b.clone().into();
-                out.push(link);
-            }
-        }
-    }
-    Ok(out)
-}
-
+/// Contains the data required to resolve conflicts among policies.
+/// It can populate a `clingo::FactBase` with the necessary atoms.
 #[derive(Debug)]
 pub struct MetaProblemInstance<'a> {
     policies: &'a Vec<Policy>,
@@ -366,6 +318,8 @@ pub struct MetaProblemInstance<'a> {
 }
 
 impl MetaProblemInstance<'_> {
+    /// Add the ASP symbols for the currently published policies, issuers,
+    /// and related metadata to a `clingo::FactBase` struct.
     fn populate(&self, fb: &mut FactBase) -> Result<(), ClingoError> {
         for issuer in self.issuers.iter() {
             fb.insert(&Symbol::create_function(
@@ -467,5 +421,81 @@ impl MetaProblemInstance<'_> {
         }
 
         Ok(())
+    }
+}
+
+fn populate_global_metadata(fb: &mut FactBase, data: &GlobalMetadata) -> Result<(), ClingoError> {
+    let mut args = match &data.subj {
+        Some(subj) => vec![Symbol::create_string(subj)?],
+        None => Vec::new(),
+    };
+
+    match &data.value {
+        MetadataValue::Boolean(v) => fb.insert(&Symbol::create_function(&data.name, &args, *v)?),
+        MetadataValue::Numerical(v) => {
+            args.push(Symbol::create_number(*v));
+            fb.insert(&Symbol::create_function(&data.name, &args, true)?)
+        }
+        MetadataValue::Categorical(v) => {
+            args.push(Symbol::create_string(v)?);
+            fb.insert(&Symbol::create_function(&data.name, &args, true)?)
+        }
+    }
+
+    Ok(())
+}
+
+fn reconstruct_path(src: &str, dst: &str, symbols: Vec<Symbol>) -> Result<Vec<Link>, ClingoError> {
+    let mut out = Vec::with_capacity(symbols.len());
+    let mut cur_node: Cow<str> = src.into();
+    while cur_node.as_ref() != dst {
+        for symbol in symbols
+            .iter()
+            .filter(|s| s.name().expect("failed to extract symbol name") == SYMBOL_CHOSEN)
+        {
+            let args = symbol.arguments()?;
+            let link = Link {
+                as_a: args[0].string()?.to_owned(),
+                if_a: args[1].string()?.to_owned(),
+                as_b: args[2].string()?.to_owned(),
+                if_b: args[3].string()?.to_owned(),
+                meta: None,
+            };
+            if link.as_a == cur_node {
+                cur_node = link.as_b.clone().into();
+                out.push(link);
+            }
+        }
+    }
+    Ok(out)
+}
+
+impl From<pb::Link> for Link {
+    fn from(value: pb::Link) -> Self {
+        Link {
+            as_a: value.as_a,
+            if_a: value.if_a,
+            as_b: value.as_b,
+            if_b: value.if_b,
+            meta: None,
+        }
+    }
+}
+
+impl PartialEq for Link {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_a == other.as_a
+            && self.if_a == other.if_a
+            && self.as_b == other.as_b
+            && self.if_b == other.if_b
+    }
+}
+
+impl Hash for Link {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_a.hash(state);
+        self.if_a.hash(state);
+        self.as_b.hash(state);
+        self.as_b.hash(state);
     }
 }

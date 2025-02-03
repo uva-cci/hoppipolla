@@ -9,14 +9,27 @@ pub type PolicyId = Uuid;
 pub type IssuerId = Uuid;
 pub type MetaPolicyId = Uuid;
 
+/// A policy represents an extension of the encoding of the base path-search problem.
+/// It can introduce either hard-constraint (integrity checks) or soft-constraints
+/// (partial orderings of the solution set).
+///
+/// A policy can be associated with an issuer entity which can be referenced in
+/// the meta-policies when regulating its activation.
 #[derive(Clone, Debug, sqlx::FromRow, sqlxinsert::PgInsert)]
 pub struct Policy {
+    /// Unique identifier for the policy
     id: PolicyId,
+    /// Time of first publication
     created_at: DateTime<Utc>,
+    /// Time of latest update
     updated_at: DateTime<Utc>,
+    /// Optional associated normative source
     issuer_id: Option<IssuerId>,
+    /// Optional descriptive name of the introduced constraint
     title: Option<String>,
+    /// Optional extended description of the introduced constraint
     description: Option<String>,
+    /// ASP code for the policy
     source: String,
 }
 
@@ -105,13 +118,21 @@ fn check_syntax(source: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+/// An issuer represents a normative source or policy-maker entity
+/// with a specific normative power (`rank`).
 #[derive(Clone, Debug, sqlx::FromRow, sqlxinsert::PgInsert)]
 pub struct Issuer {
+    /// Unique identifier for the policy
     id: IssuerId,
+    /// Time of creation for this entity
     created_at: DateTime<Utc>,
+    /// Time of latest update for this entity
     updated_at: DateTime<Utc>,
+    /// Name of the normative source
     name: String,
+    /// Normative power (the default system issuer entity has power 0)
     rank: i32,
+    /// Optional extended description of the issuer
     description: Option<String>,
 }
 
@@ -167,13 +188,24 @@ lazy_static! {
     };
 }
 
+/// A meta-policy represents a conflict resolution strategy that extends the base
+/// encoding of the conflict resolution.
+///
+/// A user can introduce their own definition for the `overrides/2` predicate and
+/// customize the way conflicts are resolved.
 #[derive(Clone, Debug, sqlx::FromRow, sqlxinsert::PgInsert)]
 pub struct MetaPolicy {
+    /// Unique identifier for the policy
     id: MetaPolicyId,
+    /// Time of first publication
     created_at: DateTime<Utc>,
+    /// Time of latest update
     updated_at: DateTime<Utc>,
+    /// Optional descriptive name for the resolution strategy
     title: Option<String>,
+    /// Optional extensive description of the introduced constraint
     description: Option<String>,
+    /// ASP code for the meta-policy
     source: String,
 }
 
