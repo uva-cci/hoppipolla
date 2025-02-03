@@ -28,7 +28,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
-        run: docker build services/nip-proxy -t eu.gcr.io/hoppipolla/nip-proxy:${{ github.sha }}
+        run: docker build ./services/nip-proxy -t eu.gcr.io/hoppipolla/nip-proxy:${{ github.sha }}
 
   path-analyzer:
     runs-on: ubuntu-latest
@@ -48,7 +48,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
-        run: docker build services/path-analyzer -t eu.gcr.io/hoppipolla/path-analyzer:${{ github.sha }}
+        run: docker build ./services/path-analyzer -t eu.gcr.io/hoppipolla/path-analyzer:${{ github.sha }}
 
   policy-manager:
     runs-on: ubuntu-latest
@@ -72,4 +72,4 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build Docker image
-        run: docker build services/policy-manager -t eu.gcr.io/hoppipolla/policy-manager:${{ github.sha }}
+        run: docker build ./services/policy-manager -t eu.gcr.io/hoppipolla/policy-manager:${{ github.sha }}
