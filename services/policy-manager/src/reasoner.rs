@@ -147,7 +147,7 @@ pub fn solve(
         .map_err(ReasonerError::AspError)?;
 
     let mut meta_ctl =
-        control(vec!["--models=1".to_string()]).expect("failed to create control handle");
+        control(vec!["--models=0".to_string()]).expect("failed to create control handle");
     meta_ctl.add_facts(&meta_fb).expect("failed to add facts");
     meta_ctl
         .add("base", &[], META_PROBLEM_ENCODING)
@@ -515,7 +515,8 @@ impl Hash for Link {
 
 #[cfg(test)]
 mod tests {
-    use std::vec;
+    use core::time;
+    use std::{thread, vec};
 
     use super::*;
 
@@ -655,7 +656,66 @@ mod tests {
         match solve(&pi, vec![pol], vec![], None, 10).unwrap() {
             None => panic!("could not find a path"),
             Some(paths) => {
-                println!("{:?}", paths);
+                assert!(!paths.is_empty());
+                for path in paths {
+                    assert!(!path.is_empty());
+                    for link in path {
+                        assert_ne!(link.as_a, "2");
+                        assert_ne!(link.as_b, "2");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_conflict_resolution_finds_error() {
+        let pi = get_simple_instance();
+        let pol_a =
+            Policy::new(None, None, None, ":- chosen(\"2\", _, _, _).".to_string()).unwrap();
+        let pol_b = Policy::new(
+            None,
+            None,
+            None,
+            ":- not chosen(\"2\", _, _, _).".to_string(),
+        )
+        .unwrap();
+        solve(&pi, vec![pol_a, pol_b], vec![], None, 10).unwrap_err();
+    }
+
+    #[test]
+    fn test_conflict_resolution_overrides() {
+        env_logger::builder()
+            .target(env_logger::Target::Stdout)
+            .init();
+
+        let pi = get_simple_instance();
+        let pol_a = Policy::new(
+            None,
+            None,
+            None,
+            ":- not chosen(\"2\", _, _, _).".to_string(),
+        )
+        .unwrap();
+        // ensure the two policies are not published at the same time and that
+        // pol_b overrides pol_a, node 2 should never be chosen
+        thread::sleep(time::Duration::from_secs(1));
+        let pol_b =
+            Policy::new(None, None, None, ":- chosen(\"2\", _, _, _).".to_string()).unwrap();
+        let metapol = MetaPolicy::new(
+            None,
+            None,
+            "
+            overrides(P1, P2) :- conflicting(P1, P2),
+                issued(_, P1, T1), issued(_, P2, T2),
+                T1 > T2.
+            "
+            .to_string(),
+        )
+        .unwrap();
+        match solve(&pi, vec![pol_a, pol_b], vec![], Some(metapol), 10).unwrap() {
+            None => panic!("could not find a path"),
+            Some(paths) => {
                 assert!(!paths.is_empty());
                 for path in paths {
                     assert!(!path.is_empty());
