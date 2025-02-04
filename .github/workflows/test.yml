@@ -11,14 +11,17 @@ on:
 
 jobs:
   policy-manager:
-    - uses: actions/checkout@v4
+    runs-on: ubuntu-latest
 
-    - uses: Swatinem/rust-cache@v2
+    steps:
+      - uses: actions/checkout@v4
 
-    - name: setup toolchain
-      uses: hecrj/setup-rust-action@v2
-      with:
-        rust-version: stable
+      - uses: Swatinem/rust-cache@v2
 
-    - name: cargo test
-      run: cargo test --all-features
+      - name: setup toolchain
+        uses: hecrj/setup-rust-action@v2
+        with:
+          rust-version: stable
+
+      - name: cargo test
+        run: cargo test --all-features
