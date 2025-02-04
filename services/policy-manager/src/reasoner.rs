@@ -26,8 +26,8 @@ const PROBLEM_ENCODING: &str = "
 :- dst(D), not chosen(_, _, D, _).
 
 % check continuity
-:- chosen(_, _, Y, YIF), #count { X, XIF : chosen(X, XIF, Y, YIF) } != 1, not src(Y).
-:- chosen(X, XIF, _, _), #count { Y, YIF : chosen(X, XIF, Y, YIF) } != 1, not dst(X).
+:- chosen(_, _, Y, _), #count { X, XIF : chosen(X, XIF, Y, _) } != 1, not src(Y).
+:- chosen(X, _, _, _), #count { Y, YIF : chosen(X, _, Y, YIF) } != 1, not dst(X).
 
 % check reachability
 reachable(S) :- src(S).
@@ -70,10 +70,11 @@ pub fn solve(
     n_models: u32,
 ) -> Result<Option<HashSet<Vec<Link>>>, ReasonerError> {
     let n_models_arg = format!("--models={}", n_models).to_string();
+    let n_opt_arg = "--opt-mode=optN".to_string();
 
     log::info!("solving with {}", n_models_arg);
 
-    let ctl_args = vec![n_models_arg];
+    let ctl_args = vec![n_models_arg, n_opt_arg];
 
     let mut fb = FactBase::new();
     pi.populate(&mut fb)
@@ -116,13 +117,21 @@ pub fn solve(
         let parts = vec![Part::new("base", vec![]).expect("failed to create base parts")];
         ctl.ground(&parts).map_err(ReasonerError::AspError)?;
 
-        for model in ctl.all_models().map_err(ReasonerError::AspError)? {
-            let path = reconstruct_path(&pi.src, &pi.dst, model.symbols)
-                .expect("unable to reconstruct pact from model");
-            log::debug!("Path found: {:?}", path);
-            sols.insert(path);
+        if pol.source().contains("#maximize") || pol.source().contains("#minimize") {
+            for model in ctl.optimal_models().map_err(ReasonerError::AspError)? {
+                let path = reconstruct_path(&pi.src, &pi.dst, model.symbols)
+                    .expect("unable to reconstruct pact from model");
+                log::debug!("Path found: {:?}", path);
+                sols.insert(path);
+            }
+        } else {
+            for model in ctl.all_models().map_err(ReasonerError::AspError)? {
+                let path = reconstruct_path(&pi.src, &pi.dst, model.symbols)
+                    .expect("unable to reconstruct pact from model");
+                log::debug!("Path found: {:?}", path);
+                sols.insert(path);
+            }
         }
-
         results.insert(pol.id(), sols);
     }
 
@@ -200,7 +209,7 @@ pub enum ReasonerError {
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
 pub enum MetadataValue {
     Boolean(bool),
-    Numerical(i32),
+    Numerical(i32), // Clingo only supports 32-bit integers
     Categorical(String),
 }
 
@@ -245,9 +254,13 @@ pub struct GlobalMetadata {
 /// It can populate a `clingo::FactBase` with the necessary atoms.
 #[derive(Debug)]
 pub struct ProblemInstance {
+    /// Source AS node
     pub src: String,
+    /// Destination AS node
     pub dst: String,
+    /// Interested network topology (candidate paths)
     pub links: Vec<Link>,
+    /// Optional global metadata to inform the policies
     pub meta: Vec<GlobalMetadata>,
 }
 
@@ -497,5 +510,161 @@ impl Hash for Link {
         self.if_a.hash(state);
         self.as_b.hash(state);
         self.as_b.hash(state);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::vec;
+
+    use super::*;
+
+    fn get_simple_instance() -> ProblemInstance {
+        ProblemInstance {
+            src: "1".to_string(),
+            dst: "4".to_string(),
+            links: Vec::from([
+                Link {
+                    as_a: "1".to_string(),
+                    if_a: "1".to_string(),
+                    as_b: "2".to_string(),
+                    if_b: "1".to_string(),
+                    meta: None,
+                },
+                Link {
+                    as_a: "1".to_string(),
+                    if_a: "3".to_string(),
+                    as_b: "2".to_string(),
+                    if_b: "3".to_string(),
+                    meta: None,
+                },
+                Link {
+                    as_a: "1".to_string(),
+                    if_a: "2".to_string(),
+                    as_b: "3".to_string(),
+                    if_b: "1".to_string(),
+                    meta: None,
+                },
+                Link {
+                    as_a: "2".to_string(),
+                    if_a: "2".to_string(),
+                    as_b: "4".to_string(),
+                    if_b: "1".to_string(),
+                    meta: None,
+                },
+                Link {
+                    as_a: "3".to_string(),
+                    if_a: "2".to_string(),
+                    as_b: "4".to_string(),
+                    if_b: "2".to_string(),
+                    meta: None,
+                },
+            ]),
+            meta: vec![],
+        }
+    }
+
+    #[test]
+    fn test_base_search() {
+        let pi = get_simple_instance();
+        match solve(&pi, vec![], vec![], None, 10).unwrap() {
+            None => panic!("could not find a path"),
+            Some(paths) => {
+                assert!(!paths.is_empty());
+                for path in paths {
+                    let link0 = path.first().unwrap();
+                    let link1 = path.get(1).unwrap();
+                    // links are not ordered by the solve function
+                    // TODO(andrea): maybe sort them?
+                    if link0.as_a == "1" && link0.as_b == "2" {
+                        assert_eq!(link1.as_a, "2");
+                    } else if link1.as_a == "1" && link1.as_b == "2" {
+                        assert_eq!(link0.as_a, "2");
+                    } else if link0.as_a == "1" && link0.as_b == "3" {
+                        assert_eq!(link1.as_a, "3");
+                    } else if link1.as_a == "1" && link1.as_b == "3" {
+                        assert_eq!(link0.as_a, "3");
+                    } else {
+                        panic!()
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_hard_constraint() {
+        let pi = get_simple_instance();
+        let pol = Policy::new(None, None, None, ":- chosen(\"2\", _, _, _).".to_string()).unwrap();
+        match solve(&pi, vec![pol], vec![], None, 10).unwrap() {
+            None => panic!("could not find a path"),
+            Some(paths) => {
+                assert!(!paths.is_empty());
+                for path in paths {
+                    assert!(!path.is_empty());
+                    for link in path {
+                        assert_ne!(link.as_a, "2");
+                        assert_ne!(link.as_b, "2");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_soft_constraint() {
+        let mut pi = get_simple_instance();
+        pi.meta = vec![
+            GlobalMetadata {
+                name: "avg_psf".to_string(),
+                subj: Some("1".to_string()),
+                value: MetadataValue::Numerical(0),
+            },
+            GlobalMetadata {
+                name: "avg_psf".to_string(),
+                subj: Some("2".to_string()),
+                value: MetadataValue::Numerical(5),
+            },
+            GlobalMetadata {
+                name: "avg_psf".to_string(),
+                subj: Some("3".to_string()),
+                value: MetadataValue::Numerical(10),
+            },
+            GlobalMetadata {
+                name: "avg_psf".to_string(),
+                subj: Some("4".to_string()),
+                value: MetadataValue::Numerical(0),
+            },
+        ];
+
+        let pol = Policy::new(
+            None,
+            None,
+            None,
+            "   
+            total_avg_psf(TotAvgPsf) :- 
+            TotAvgPsf=#sum{AvgPsf: avg_psf(AS, AvgPsf),
+            chosen(AS, _, _, _)}.
+            
+            #maximize { TotAvgPsf: total_avg_psf(TotAvgPsf) }.
+            "
+            .to_string(),
+        )
+        .unwrap();
+
+        match solve(&pi, vec![pol], vec![], None, 10).unwrap() {
+            None => panic!("could not find a path"),
+            Some(paths) => {
+                println!("{:?}", paths);
+                assert!(!paths.is_empty());
+                for path in paths {
+                    assert!(!path.is_empty());
+                    for link in path {
+                        assert_ne!(link.as_a, "2");
+                        assert_ne!(link.as_b, "2");
+                    }
+                }
+            }
+        }
     }
 }
