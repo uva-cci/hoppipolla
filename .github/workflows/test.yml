@@ -1,0 +1,24 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+      - workflows # for testing
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  policy-manager:
+    - uses: actions/checkout@v4
+
+    - uses: Swatinem/rust-cache@v2
+
+    - name: setup toolchain
+      uses: hecrj/setup-rust-action@v2
+      with:
+        rust-version: stable
+
+    - name: cargo test
+      run: cargo test --all-features

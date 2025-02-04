@@ -1,13 +1,14 @@
 name: Build
 
 on:
-  push:
+  workflow_run:
+    workflows:
+      - Test
     branches:
       - main
       - workflows # for testing
-  pull_request:
-    branches:
-      - main
+    types:
+      - completed
 
 jobs:
   nip-proxy:

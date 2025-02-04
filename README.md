@@ -4,6 +4,7 @@
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Build](https://github.com/marinoandrea/hoppipolla/actions/workflows/build.yml/badge.svg)](.github/workflows/build.yml)
+[![Test](https://github.com/marinoandrea/hoppipolla/actions/workflows/test.yml/badge.svg)](.github/workflows/test.yml)
 
 > [!WARNING]  
 > This software is in early phase of development and is not ready for
