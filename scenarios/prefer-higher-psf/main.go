@@ -61,7 +61,7 @@ func setup() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -93,6 +93,10 @@ func setup() {
 }
 
 func clean() {
-	pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{})
-	paClient.Refresh(context.TODO(), &emptypb.Empty{})
+	if _, err := pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to reset policies:", err)
+	}
+	if _, err := paClient.Refresh(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to refresh paths:", err)
+	}
 }

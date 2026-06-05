@@ -66,7 +66,7 @@ func executeBasePtc2() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer paConn.Close()
+	defer func() { _ = paConn.Close() }()
 
 	paClient := papb.NewPathAnalyzerClient(paConn)
 	paReq := papb.GetPathsRequest{Destination: DST}
@@ -91,7 +91,7 @@ func executeBasePtc3() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -133,7 +133,7 @@ func executeBasePtc4() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -190,7 +190,7 @@ func executeBasePtc5() {
 	}
 
 	policyA := string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// load policy B
 	f, err = os.Open("./conflict-resolution/policy-b.lp")
@@ -211,7 +211,7 @@ func executeBasePtc5() {
 	}
 
 	policyB := string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// load meta-policy
 	f, err = os.Open("./conflict-resolution/meta-policy.lp")
@@ -232,7 +232,7 @@ func executeBasePtc5() {
 	}
 
 	metaPolicy := string(buf)
-	f.Close()
+	_ = f.Close()
 
 	pmReqA := pmpb.CreatePolicyRequest{Source: string(policyA)}
 	pmReqB := pmpb.CreatePolicyRequest{Source: string(policyB)}
@@ -294,8 +294,12 @@ func setupBase() {
 }
 
 func cleanBase() {
-	pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{})
-	paClient.Refresh(context.TODO(), &emptypb.Empty{})
+	if _, err := pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to reset policies:", err)
+	}
+	if _, err := paClient.Refresh(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to refresh paths:", err)
+	}
 }
 
 func saveBaseResults() {
@@ -311,7 +315,9 @@ func saveBaseResults() {
 			line += "\t"
 		}
 	}
-	f.WriteString(line + "\n")
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		log.Fatalln(err)
+	}
 
 	for run := range N_RUNS {
 		line := ""
@@ -321,6 +327,8 @@ func saveBaseResults() {
 				line += "\t"
 			}
 		}
-		f.WriteString(line + "\n")
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			log.Fatalln(err)
+		}
 	}
 }

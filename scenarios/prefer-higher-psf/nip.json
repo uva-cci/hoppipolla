@@ -1,6 +1,6 @@
 {
   "node_info": [
-    { "node": "19-ffaa:0:1309", "name": "avg_psf", "value_int32": "10" }
+    { "node": "19-ffaa:0:1309", "name": "avg_psf", "value_int32": 10 }
   ],
   "link_info": []
 }

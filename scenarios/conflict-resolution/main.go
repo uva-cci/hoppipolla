@@ -88,7 +88,7 @@ func setup() {
 	}
 
 	policyA = string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// load policy B
 	f, err = os.Open("./policy-b.lp")
@@ -109,7 +109,7 @@ func setup() {
 	}
 
 	policyB = string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// load meta-policy
 	f, err = os.Open("./meta-policy.lp")
@@ -130,7 +130,7 @@ func setup() {
 	}
 
 	metaPolicy = string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// initialize connection to path-analyzer service
 	paConn, err := grpc.NewClient("127.0.0.1:27001", grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -148,6 +148,10 @@ func setup() {
 }
 
 func clean() {
-	pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{})
-	paClient.Refresh(context.TODO(), &emptypb.Empty{})
+	if _, err := pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to reset policies:", err)
+	}
+	if _, err := paClient.Refresh(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to refresh paths:", err)
+	}
 }

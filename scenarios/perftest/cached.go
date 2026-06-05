@@ -66,7 +66,7 @@ func executeCachedPtc2() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer paConn.Close()
+	defer func() { _ = paConn.Close() }()
 
 	paClient := papb.NewPathAnalyzerClient(paConn)
 	paReq := papb.GetPathsRequest{Destination: DST}
@@ -87,7 +87,7 @@ func executeCachedPtc3() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -125,7 +125,7 @@ func executeCachedPtc4() {
 	if err != nil {
 		log.Fatalln(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
@@ -178,7 +178,7 @@ func executeCachedPtc5() {
 	}
 
 	policyA := string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// load policy B
 	f, err = os.Open("./conflict-resolution/policy-b.lp")
@@ -199,7 +199,7 @@ func executeCachedPtc5() {
 	}
 
 	policyB := string(buf)
-	f.Close()
+	_ = f.Close()
 
 	// load meta-policy
 	f, err = os.Open("./conflict-resolution/meta-policy.lp")
@@ -220,7 +220,7 @@ func executeCachedPtc5() {
 	}
 
 	metaPolicy := string(buf)
-	f.Close()
+	_ = f.Close()
 
 	pmReqA := pmpb.CreatePolicyRequest{Source: string(policyA)}
 	pmReqB := pmpb.CreatePolicyRequest{Source: string(policyB)}
@@ -278,8 +278,12 @@ func setupCached() {
 }
 
 func cleanCached() {
-	pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{})
-	paClient.Refresh(context.TODO(), &emptypb.Empty{})
+	if _, err := pmClient.ResetPolicies(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to reset policies:", err)
+	}
+	if _, err := paClient.Refresh(context.TODO(), &emptypb.Empty{}); err != nil {
+		log.Println("ERROR: failed to refresh paths:", err)
+	}
 }
 
 func saveCachedResults() {
@@ -295,16 +299,20 @@ func saveCachedResults() {
 			line += "\t"
 		}
 	}
-	f.WriteString(line + "\n")
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		log.Fatalln(err)
+	}
 
 	for run := range N_RUNS {
 		line := ""
 		for test := range N_TEST {
-			line += fmt.Sprintf("%s", results[test][run])
+			line += results[test][run].String()
 			if test < N_TEST-1 {
 				line += "\t"
 			}
 		}
-		f.WriteString(line + "\n")
+		if _, err := f.WriteString(line + "\n"); err != nil {
+			log.Fatalln(err)
+		}
 	}
 }

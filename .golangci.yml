@@ -1,0 +1,16 @@
+# yaml-language-server: $schema=https://golangci-lint.run/jsonschema/golangci.jsonschema.json
+version: "2"
+
+run:
+  # CI passes --timeout=5m on the CLI; matching it here keeps local runs identical.
+  timeout: 5m
+  # Skip test files. Static analysis on tests catches a lot of false positives
+  # (table-driven helpers flagged unused, intentional shadowing, mock-only error
+  # discards) without adding signal to production code quality.
+  tests: false
+
+linters:
+  # Standard set: errcheck, govet, ineffassign, staticcheck, unused.
+  default: standard
+  enable:
+    - gosec
