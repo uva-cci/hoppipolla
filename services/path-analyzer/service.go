@@ -111,35 +111,37 @@ func (s server) GetPaths(ctx context.Context, req *pb.GetPathsRequest) (*pb.GetP
 	if err != nil {
 		return nil, err
 	}
-
-	minExpiry := int64(math.MaxInt64)
-	links := make([]*policypb.Link, 0)
-	for _, path := range candidates[:s.config.NPaths] {
-		minExpiry = min(path.Metadata().Expiry.UnixMilli(), minExpiry)
-		idfs := path.Metadata().Interfaces
-		for i := range len(idfs) {
-			if i == len(idfs)-1 {
-				break
-			}
-			idfA := idfs[i]
-			idfB := idfs[i+1]
-			links = append(links, &policypb.Link{
-				AsA: idfA.IA.String(),
-				IfA: idfA.ID.String(),
-				AsB: idfB.IA.String(),
-				IfB: idfB.ID.String()})
-		}
+	if len(candidates) > s.config.NPaths {
+		candidates = candidates[:s.config.NPaths]
+	}
+	if len(candidates) == 0 {
+		res.Paths = []*pb.Path{}
+		return &res, nil
 	}
 
-	// evict cache once paths have expired
-	time.AfterFunc(time.Duration((minExpiry-time.Now().UnixMilli())*time.Hour.Milliseconds()), func() {
-		s.cache.Remove(dst)
-	})
+	// hand the policy manager the candidate paths as-is; the solver only
+	// selects among them, so every returned path is a real, forwardable
+	// SCION path by construction
+	minExpiry := int64(math.MaxInt64)
+	policyPaths := make([]*policypb.Path, 0, len(candidates))
+	for _, path := range candidates {
+		minExpiry = min(path.Metadata().Expiry.UnixMilli(), minExpiry)
+		idfs := path.Metadata().Interfaces
+		links := make([]*policypb.Link, 0, len(idfs)-1)
+		for i := 0; i+1 < len(idfs); i++ {
+			links = append(links, &policypb.Link{
+				AsA: idfs[i].IA.String(),
+				IfA: idfs[i].ID.String(),
+				AsB: idfs[i+1].IA.String(),
+				IfB: idfs[i+1].ID.String()})
+		}
+		policyPaths = append(policyPaths, &policypb.Path{Links: links})
+	}
 
 	policyReq := policypb.FindPathsRequest{
 		Src:   src.String(),
 		Dst:   dst.String(),
-		Links: links}
+		Paths: policyPaths}
 	policyRes, err := s.policyManagerClient.FindPaths(ctx, &policyReq)
 	if err != nil {
 		return nil, err
@@ -147,63 +149,56 @@ func (s server) GetPaths(ctx context.Context, req *pb.GetPathsRequest) (*pb.GetP
 
 	paths = make([]*pb.Path, 0, len(policyRes.Paths))
 	for _, path := range policyRes.Paths {
-		paths = append(paths, fromPolicyPBToPathPB(policyReq.Src, policyReq.Dst, path))
+		hops, err := pathToHops(policyReq.Src, policyReq.Dst, path.Links)
+		if err != nil {
+			log.Warnf("dropping malformed path from policy manager: %v", err)
+			continue
+		}
+		paths = append(paths, &pb.Path{Src: policyReq.Src, Dst: policyReq.Dst, Hops: hops})
 	}
-	s.cache.Add(dst, paths)
 	res.Paths = paths
+
+	// cache results and evict them once the underlying paths have expired
+	if ttl := time.Duration(minExpiry-time.Now().UnixMilli()) * time.Millisecond; ttl > 0 {
+		s.cache.Add(dst, paths)
+		time.AfterFunc(ttl, func() {
+			s.cache.Remove(dst)
+		})
+	}
 
 	return &res, nil
 }
 
-// Reconstructs the path in order of visit
-func fromPolicyPBToPathPB(src string, dst string, path *policypb.Path) *pb.Path {
-	cut := func(i int, xs []*policypb.Link) (*policypb.Link, []*policypb.Link) {
-		y := xs[i]
-		ys := append(xs[:i], xs[i+1:]...)
-		return y, ys
+// Converts the link sequence of a path returned by the policy manager into
+// the full interface (hop) sequence. The links are echoed back from the
+// candidate we sent, so they are validated rather than reconstructed: they
+// must form an interface-contiguous chain from src to dst.
+func pathToHops(src, dst string, links []*policypb.Link) ([]*pb.Hop, error) {
+	if len(links) == 0 {
+		return nil, fmt.Errorf("path contains no links")
+	}
+	if links[0].AsA != src {
+		return nil, fmt.Errorf("chain starts at AS %s instead of source %s", links[0].AsA, src)
+	}
+	if links[len(links)-1].AsB != dst {
+		return nil, fmt.Errorf(
+			"chain ends at AS %s instead of destination %s", links[len(links)-1].AsB, dst)
 	}
 
-	out := pb.Path{
-		Src:  src,
-		Dst:  dst,
-		Hops: make([]*pb.Hop, 0, len(path.Links)*2),
-	}
-
-	currentNode := src
-	for {
-		found_i := -1
-		for i, link := range path.Links {
-			if currentNode == out.Src {
-				out.Hops = append(out.Hops, &pb.Hop{
-					As: link.AsA,
-					If: link.IfA,
-				})
-				out.Hops = append(out.Hops, &pb.Hop{
-					As: link.AsB,
-					If: link.IfB,
-				})
-				currentNode = link.AsB
-				found_i = i
-				break
-			} else if link.AsA == currentNode {
-				out.Hops = append(out.Hops, &pb.Hop{
-					As: link.AsB,
-					If: link.IfB,
-				})
-				currentNode = link.AsB
-				found_i = i
-				break
+	hops := make([]*pb.Hop, 0, len(links)+1)
+	hops = append(hops, &pb.Hop{As: links[0].AsA, If: links[0].IfA})
+	for i, link := range links {
+		if i > 0 {
+			prev := links[i-1]
+			if prev.AsB != link.AsA || prev.IfB != link.IfA {
+				return nil, fmt.Errorf(
+					"chain is not contiguous: link %d ends at %s#%s but link %d starts at %s#%s",
+					i-1, prev.AsB, prev.IfB, i, link.AsA, link.IfA)
 			}
 		}
-
-		if len(path.Links) == 0 || found_i == -1 {
-			break
-		}
-
-		cut(found_i, path.Links)
+		hops = append(hops, &pb.Hop{As: link.AsB, If: link.IfB})
 	}
-
-	return &out
+	return hops, nil
 }
 
 func main() {

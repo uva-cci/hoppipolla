@@ -126,11 +126,15 @@ message FindPathsRequest {
   string src = 2;
   // Destination address, format is protocol/stack dependent
   string dst = 3;
-  // Network hops in the path, excluding source and destination
-  repeated Link links = 4;
+  // Candidate paths discovered by the underlying network stack.
+  // The policy manager only ever selects among these, so every returned
+  // path is guaranteed to correspond to a real, forwardable candidate.
+  repeated Path paths = 4;
 }
 
 message Path {
+  // Links in visit order, including intra-AS traversals, so that the
+  // full interface sequence of the path can be recovered.
   repeated Link links = 1;
 }
 

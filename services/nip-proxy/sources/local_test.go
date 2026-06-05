@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -115,6 +116,41 @@ func TestParseMetadata(t *testing.T) {
 			name:    "string-encoded int32 is rejected",
 			input:   `{ "node_info": [{ "node": "19-ffaa:0:1309", "name": "avg_psf", "value_int32": "10" }] }`,
 			wantErr: true,
+		},
+		{
+			name:    "node metadata without any value is rejected",
+			input:   `{ "node_info": [{ "node": "17-ffaa:0:1101", "name": "operates" }] }`,
+			wantErr: true,
+		},
+		{
+			name: "node metadata with multiple values is rejected",
+			input: `{ "node_info": [
+				{ "node": "17-ffaa:0:1101", "name": "operates", "value_string": "CH", "value_bool": true }
+			] }`,
+			wantErr: true,
+		},
+		{
+			name: "link metadata without any value is rejected",
+			input: `{ "link_info": [
+				{ "name": "encrypted", "link": { "as_a": "17-ffaa:0:1101", "if_a": "1", "as_b": "17-ffaa:0:1102", "if_b": "2" } }
+			] }`,
+			wantErr: true,
+		},
+		{
+			name: "collected_at timestamp round-trips",
+			input: `{ "node_info": [
+				{ "node": "17-ffaa:0:1101", "name": "operates", "value_string": "CH", "collected_at": "2026-06-05T12:00:00Z" }
+			] }`,
+			want: &Metadata{
+				NodeInfo: []NodeMetadata{
+					{
+						Node:        "17-ffaa:0:1101",
+						Name:        "operates",
+						ValueString: ptr("CH"),
+						CollectedAt: ptr(time.Date(2026, 6, 5, 12, 0, 0, 0, time.UTC)),
+					},
+				},
+			},
 		},
 	}
 

@@ -1,4 +1,7 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use lazy_static::lazy_static;
 use tokio::sync::{Mutex, RwLock};
@@ -126,6 +129,26 @@ impl Service {
         );
 
         Ok(())
+    }
+}
+
+/// Converts the value union of a NIP metadata entry into a reasoner value,
+/// requiring exactly one of the fields to be set. Malformed entries degrade
+/// to a failed RPC instead of crashing the service.
+fn metadata_value(
+    name: &str,
+    value_bool: Option<bool>,
+    value_int32: Option<i32>,
+    value_string: &Option<String>,
+) -> Result<reasoner::MetadataValue, Status> {
+    match (value_bool, value_int32, value_string) {
+        (Some(v), None, None) => Ok(reasoner::MetadataValue::Boolean(v)),
+        (None, Some(v), None) => Ok(reasoner::MetadataValue::Numerical(v)),
+        (None, None, Some(v)) => Ok(reasoner::MetadataValue::Categorical(v.to_owned())),
+        _ => Err(Status::invalid_argument(format!(
+            "nip proxy returned metadata '{}' without exactly one value set",
+            name
+        ))),
     }
 }
 
@@ -297,6 +320,30 @@ impl PolicyManager for Service {
         let issuers = ISSUERS.read().await.values().cloned().collect();
         let meta_policy = META_POLICY.read().await.clone();
 
+        // flatten the candidate paths into a deduplicated link topology for
+        // the metadata lookup; links shared between candidates only need to
+        // be resolved once
+        let mut seen_links = HashSet::new();
+        let topology = req
+            .paths
+            .iter()
+            .flat_map(|path| path.links.iter())
+            .filter(|link| {
+                seen_links.insert((
+                    link.as_a.clone(),
+                    link.if_a.clone(),
+                    link.as_b.clone(),
+                    link.if_b.clone(),
+                ))
+            })
+            .map(|link| nippb::Link {
+                as_a: link.as_a.clone(),
+                if_a: link.if_a.clone(),
+                as_b: link.as_b.clone(),
+                if_b: link.if_b.clone(),
+            })
+            .collect();
+
         let nip_res = self
             .nip_proxy
             .clone() // FIXME: might be undesireable behavior
@@ -304,32 +351,18 @@ impl PolicyManager for Service {
             .get_metadata(nippb::GetMetadataRequest {
                 src: req.src.clone(),
                 dst: req.dst.clone(),
-                topology: req
-                    .links
-                    .iter()
-                    .map(|link| nippb::Link {
-                        as_a: link.as_a.clone(),
-                        if_a: link.if_a.clone(),
-                        as_b: link.as_b.clone(),
-                        if_b: link.if_b.clone(),
-                    })
-                    .collect(),
+                topology,
             })
             .await?;
 
-        let pi = reasoner::ProblemInstance {
-            src: req.src.to_owned(),
-            dst: req.dst.to_owned(),
-            links: req
-                .links
-                .iter()
-                .map(|link| reasoner::Link {
-                    as_a: link.as_a.to_owned(),
-                    if_a: link.if_a.to_owned(),
-                    as_b: link.as_b.to_owned(),
-                    if_b: link.if_b.to_owned(),
-                    meta: Some(
-                        nip_res
+        let paths = req
+            .paths
+            .iter()
+            .map(|path| {
+                path.links
+                    .iter()
+                    .map(|link| {
+                        let meta = nip_res
                             .get_ref()
                             .link_info
                             .iter()
@@ -342,65 +375,53 @@ impl PolicyManager for Service {
                                 })
                             })
                             .map(|info| {
-                                if info.value_bool.is_some() {
-                                    reasoner::Metadata {
-                                        name: info.name.to_owned(),
-                                        value: reasoner::MetadataValue::Boolean(
-                                            info.value_bool.unwrap(),
-                                        ),
-                                    }
-                                } else if info.value_int32.is_some() {
-                                    reasoner::Metadata {
-                                        name: info.name.to_owned(),
-                                        value: reasoner::MetadataValue::Numerical(
-                                            info.value_int32.unwrap(),
-                                        ),
-                                    }
-                                } else if info.value_string.is_some() {
-                                    reasoner::Metadata {
-                                        name: info.name.to_owned(),
-                                        value: reasoner::MetadataValue::Categorical(
-                                            info.value_string.to_owned().unwrap(),
-                                        ),
-                                    }
-                                } else {
-                                    panic!("nip proxy is returning invalid data")
-                                }
+                                Ok(reasoner::Metadata {
+                                    name: info.name.to_owned(),
+                                    value: metadata_value(
+                                        &info.name,
+                                        info.value_bool,
+                                        info.value_int32,
+                                        &info.value_string,
+                                    )?,
+                                })
                             })
-                            .collect(),
-                    ),
+                            .collect::<Result<Vec<_>, Status>>()?;
+
+                        Ok(reasoner::Link {
+                            as_a: link.as_a.to_owned(),
+                            if_a: link.if_a.to_owned(),
+                            as_b: link.as_b.to_owned(),
+                            if_b: link.if_b.to_owned(),
+                            meta: Some(meta),
+                        })
+                    })
+                    .collect::<Result<Vec<_>, Status>>()
+            })
+            .collect::<Result<Vec<_>, Status>>()?;
+
+        let meta = nip_res
+            .get_ref()
+            .node_info
+            .iter()
+            .map(|info| {
+                Ok(reasoner::GlobalMetadata {
+                    name: info.name.to_owned(),
+                    subj: Some(info.node.to_owned()),
+                    value: metadata_value(
+                        &info.name,
+                        info.value_bool,
+                        info.value_int32,
+                        &info.value_string,
+                    )?,
                 })
-                .collect(),
-            meta: nip_res
-                .get_ref()
-                .node_info
-                .iter()
-                .map(|info| {
-                    if info.value_bool.is_some() {
-                        reasoner::GlobalMetadata {
-                            name: info.name.to_owned(),
-                            subj: Some(info.node.to_owned()),
-                            value: reasoner::MetadataValue::Boolean(info.value_bool.unwrap()),
-                        }
-                    } else if info.value_int32.is_some() {
-                        reasoner::GlobalMetadata {
-                            name: info.name.to_owned(),
-                            subj: Some(info.node.to_owned()),
-                            value: reasoner::MetadataValue::Numerical(info.value_int32.unwrap()),
-                        }
-                    } else if info.value_string.is_some() {
-                        reasoner::GlobalMetadata {
-                            name: info.name.to_owned(),
-                            subj: Some(info.node.to_owned()),
-                            value: reasoner::MetadataValue::Categorical(
-                                info.value_string.to_owned().unwrap(),
-                            ),
-                        }
-                    } else {
-                        panic!("nip proxy is returning invalid data")
-                    }
-                })
-                .collect(),
+            })
+            .collect::<Result<Vec<_>, Status>>()?;
+
+        let pi = reasoner::ProblemInstance {
+            src: req.src.to_owned(),
+            dst: req.dst.to_owned(),
+            paths,
+            meta,
         };
 
         // log::debug!("{:?}", pi);
@@ -411,6 +432,9 @@ impl PolicyManager for Service {
             ReasonerError::ConflictResolutionError => {
                 Status::aborted("failed to solve conflict".to_string())
             }
+            ReasonerError::MalformedModel => Status::internal(
+                "solver produced a model without exactly one chosen candidate path".to_string(),
+            ),
         })?;
 
         if let Some(paths) = solution {

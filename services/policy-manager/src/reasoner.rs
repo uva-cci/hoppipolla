@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     collections::{HashMap, HashSet},
     hash::Hash,
 };
@@ -11,49 +10,17 @@ use crate::policy_manager as pb;
 
 const SYMBOL_SRC: &str = "src";
 const SYMBOL_DST: &str = "dst";
-const SYMBOL_LINK: &str = "link";
-const SYMBOL_CHOSEN: &str = "chosen";
+const SYMBOL_PATH: &str = "path";
+const SYMBOL_IN_PATH: &str = "in_path";
+const SYMBOL_CHOSEN_PATH: &str = "chosen_path";
+const SYMBOL_HAS_METADATA: &str = "has_metadata";
 const SYMBOL_ISSUED: &str = "issued";
 const SYMBOL_POWER: &str = "power";
 const SYMBOL_CONFLICTING: &str = "conflicting";
 const SYMBOL_DEACTIVATE: &str = "deactivate";
 
-const PROBLEM_ENCODING: &str = "
-{ chosen(X, XIF, Y, YIF) : link(X, XIF, Y, YIF) } 1 :- link(X, _, _, _).
-
-% check inclusion of source and destination
-:- src(S), not chosen(S, _, _, _).
-:- dst(D), not chosen(_, _, D, _).
-
-% check continuity
-:- chosen(_, _, Y, _), #count { X, XIF : chosen(X, XIF, Y, _) } != 1, not src(Y).
-:- chosen(X, _, _, _), #count { Y, YIF : chosen(X, _, Y, YIF) } != 1, not dst(X).
-
-% check reachability
-reachable(S) :- src(S).
-reachable(Y) :- reachable(X), chosen(X, _, Y, _).
-:- dst(D), not reachable(D).
-
-% filter out empty models
-:- #count { : chosen(_, _, _, _) } == 0.
-
-#show chosen/4.
-";
-
-const META_PROBLEM_ENCODING: &str = "
-conflicting(P2, P1) :- conflicting(P1, P2).
-
-:- conflicting(P1, P2), 
-    not overrides(_, P2), 
-    not overrides(_, P1).
-
-deactivate(P) :- overrides(_, P).
-
-% filter out empty models
-:- #count { : deactivate(_) } == 0, #count { : conflicting(_, _) } > 0.
-
-#show deactivate/1.
-";
+const PROBLEM_ENCODING: &str = include_str!("encodings/problem.lp");
+const META_PROBLEM_ENCODING: &str = include_str!("encodings/meta_problem.lp");
 
 /// Finds `n_models` viable paths, where viability is here defined as satisfying
 /// requirements and maximizing satisfaction of preferences expressed in the provided
@@ -92,8 +59,7 @@ pub fn solve(
         ctl.ground(&parts).map_err(ReasonerError::AspError)?;
 
         for model in ctl.all_models().map_err(ReasonerError::AspError)? {
-            let path = reconstruct_path(&pi.src, &pi.dst, model.symbols)
-                .expect("unable to reconstruct pact from model");
+            let path = chosen_candidate(pi, model.symbols)?;
             log::debug!("Path found: {:?}", path);
             sols.insert(path);
         }
@@ -119,15 +85,13 @@ pub fn solve(
 
         if pol.source().contains("#maximize") || pol.source().contains("#minimize") {
             for model in ctl.optimal_models().map_err(ReasonerError::AspError)? {
-                let path = reconstruct_path(&pi.src, &pi.dst, model.symbols)
-                    .expect("unable to reconstruct pact from model");
+                let path = chosen_candidate(pi, model.symbols)?;
                 log::debug!("Path found: {:?}", path);
                 sols.insert(path);
             }
         } else {
             for model in ctl.all_models().map_err(ReasonerError::AspError)? {
-                let path = reconstruct_path(&pi.src, &pi.dst, model.symbols)
-                    .expect("unable to reconstruct pact from model");
+                let path = chosen_candidate(pi, model.symbols)?;
                 log::debug!("Path found: {:?}", path);
                 sols.insert(path);
             }
@@ -204,6 +168,9 @@ pub fn solve(
 pub enum ReasonerError {
     AspError(ClingoError),
     ConflictResolutionError,
+    /// The model does not contain exactly one valid `chosen_path/1` atom
+    /// (e.g. a policy injected extra atoms).
+    MalformedModel,
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Clone)]
@@ -258,8 +225,9 @@ pub struct ProblemInstance {
     pub src: String,
     /// Destination AS node
     pub dst: String,
-    /// Interested network topology (candidate paths)
-    pub links: Vec<Link>,
+    /// Candidate paths discovered by the network stack; the solver only
+    /// ever selects among these, so every solution is a real path
+    pub paths: Vec<Vec<Link>>,
     /// Optional global metadata to inform the policies
     pub meta: Vec<GlobalMetadata>,
 }
@@ -279,34 +247,66 @@ impl ProblemInstance {
             true,
         )?);
 
-        for link in self.links.iter() {
-            let args = vec![
-                Symbol::create_string(&link.as_a)?,
-                Symbol::create_string(&link.if_a)?,
-                Symbol::create_string(&link.as_b)?,
-                Symbol::create_string(&link.if_b)?,
-            ];
+        // links shared between candidates carry the same metadata atoms,
+        // only emit them once
+        let mut seen_links = HashSet::new();
 
-            fb.insert(&Symbol::create_function(SYMBOL_LINK, &args, true)?);
+        for (idx, path) in self.paths.iter().enumerate() {
+            let path_symbol = Symbol::create_number(idx as i32);
 
-            if link.meta.is_none() {
-                continue;
-            }
+            fb.insert(&Symbol::create_function(SYMBOL_PATH, &[path_symbol], true)?);
 
-            for data in link.meta.as_ref().unwrap().iter() {
-                match &data.value {
-                    MetadataValue::Boolean(v) => {
-                        fb.insert(&Symbol::create_function(&data.name, &args, *v)?)
-                    }
-                    MetadataValue::Numerical(v) => {
-                        let mut new_args = args.clone();
-                        new_args.push(Symbol::create_number(*v));
-                        fb.insert(&Symbol::create_function(&data.name, &new_args, true)?)
-                    }
-                    MetadataValue::Categorical(v) => {
-                        let mut new_args = args.clone();
-                        new_args.push(Symbol::create_string(v)?);
-                        fb.insert(&Symbol::create_function(&data.name, &new_args, true)?)
+            for link in path.iter() {
+                let args = vec![
+                    Symbol::create_string(&link.as_a)?,
+                    Symbol::create_string(&link.if_a)?,
+                    Symbol::create_string(&link.as_b)?,
+                    Symbol::create_string(&link.if_b)?,
+                ];
+
+                let mut in_path_args = vec![path_symbol];
+                in_path_args.extend(args.iter().cloned());
+                fb.insert(&Symbol::create_function(SYMBOL_IN_PATH, &in_path_args, true)?);
+
+                if !seen_links.insert((
+                    link.as_a.clone(),
+                    link.if_a.clone(),
+                    link.as_b.clone(),
+                    link.if_b.clone(),
+                )) {
+                    continue;
+                }
+
+                if link.meta.is_none() {
+                    continue;
+                }
+
+                for data in link.meta.as_ref().unwrap().iter() {
+                    // coverage atom: lets policies distinguish "no data"
+                    // from a negative verdict under closed-world semantics;
+                    // always positive, even for false booleans
+                    let mut coverage_args = vec![Symbol::create_string(&data.name)?];
+                    coverage_args.extend(args.iter().cloned());
+                    fb.insert(&Symbol::create_function(
+                        SYMBOL_HAS_METADATA,
+                        &coverage_args,
+                        true,
+                    )?);
+
+                    match &data.value {
+                        MetadataValue::Boolean(v) => {
+                            fb.insert(&Symbol::create_function(&data.name, &args, *v)?)
+                        }
+                        MetadataValue::Numerical(v) => {
+                            let mut new_args = args.clone();
+                            new_args.push(Symbol::create_number(*v));
+                            fb.insert(&Symbol::create_function(&data.name, &new_args, true)?)
+                        }
+                        MetadataValue::Categorical(v) => {
+                            let mut new_args = args.clone();
+                            new_args.push(Symbol::create_string(v)?);
+                            fb.insert(&Symbol::create_function(&data.name, &new_args, true)?)
+                        }
                     }
                 }
             }
@@ -443,6 +443,17 @@ fn populate_global_metadata(fb: &mut FactBase, data: &GlobalMetadata) -> Result<
         None => Vec::new(),
     };
 
+    // coverage atom: lets policies distinguish "no data" from a negative
+    // verdict under closed-world semantics; always positive, even for
+    // false booleans
+    let mut coverage_args = vec![Symbol::create_string(&data.name)?];
+    coverage_args.extend(args.iter().cloned());
+    fb.insert(&Symbol::create_function(
+        SYMBOL_HAS_METADATA,
+        &coverage_args,
+        true,
+    )?);
+
     match &data.value {
         MetadataValue::Boolean(v) => fb.insert(&Symbol::create_function(&data.name, &args, *v)?),
         MetadataValue::Numerical(v) => {
@@ -458,29 +469,28 @@ fn populate_global_metadata(fb: &mut FactBase, data: &GlobalMetadata) -> Result<
     Ok(())
 }
 
-fn reconstruct_path(src: &str, dst: &str, symbols: Vec<Symbol>) -> Result<Vec<Link>, ClingoError> {
-    let mut out = Vec::with_capacity(symbols.len());
-    let mut cur_node: Cow<str> = src.into();
-    while cur_node.as_ref() != dst {
-        for symbol in symbols
-            .iter()
-            .filter(|s| s.name().expect("failed to extract symbol name") == SYMBOL_CHOSEN)
-        {
-            let args = symbol.arguments()?;
-            let link = Link {
-                as_a: args[0].string()?.to_owned(),
-                if_a: args[1].string()?.to_owned(),
-                as_b: args[2].string()?.to_owned(),
-                if_b: args[3].string()?.to_owned(),
-                meta: None,
-            };
-            if link.as_a == cur_node {
-                cur_node = link.as_b.clone().into();
-                out.push(link);
-            }
+/// Extracts the candidate path selected by a model. The problem encoding
+/// guarantees exactly one `chosen_path/1` atom per model; anything else
+/// means the model is malformed (e.g. a policy injected extra atoms).
+fn chosen_candidate(pi: &ProblemInstance, symbols: Vec<Symbol>) -> Result<Vec<Link>, ReasonerError> {
+    let mut chosen = None;
+    for symbol in symbols.iter() {
+        if symbol.name().map_err(ReasonerError::AspError)? != SYMBOL_CHOSEN_PATH {
+            continue;
         }
+        let args = symbol.arguments().map_err(ReasonerError::AspError)?;
+        if args.len() != 1 || chosen.is_some() {
+            return Err(ReasonerError::MalformedModel);
+        }
+        chosen = Some(args[0].number().map_err(ReasonerError::AspError)?);
     }
-    Ok(out)
+
+    let idx = chosen.ok_or(ReasonerError::MalformedModel)?;
+    usize::try_from(idx)
+        .ok()
+        .and_then(|idx| pi.paths.get(idx))
+        .cloned()
+        .ok_or(ReasonerError::MalformedModel)
 }
 
 impl From<pb::Link> for Link {
@@ -509,7 +519,7 @@ impl Hash for Link {
         self.as_a.hash(state);
         self.if_a.hash(state);
         self.as_b.hash(state);
-        self.as_b.hash(state);
+        self.if_b.hash(state);
     }
 }
 
@@ -520,48 +530,134 @@ mod tests {
 
     use super::*;
 
+    fn link(as_a: &str, if_a: &str, as_b: &str, if_b: &str) -> Link {
+        Link {
+            as_a: as_a.to_string(),
+            if_a: if_a.to_string(),
+            as_b: as_b.to_string(),
+            if_b: if_b.to_string(),
+            meta: None,
+        }
+    }
+
     fn get_simple_instance() -> ProblemInstance {
         ProblemInstance {
             src: "1".to_string(),
             dst: "4".to_string(),
-            links: Vec::from([
-                Link {
-                    as_a: "1".to_string(),
-                    if_a: "1".to_string(),
-                    as_b: "2".to_string(),
-                    if_b: "1".to_string(),
-                    meta: None,
-                },
-                Link {
-                    as_a: "1".to_string(),
-                    if_a: "3".to_string(),
-                    as_b: "2".to_string(),
-                    if_b: "3".to_string(),
-                    meta: None,
-                },
-                Link {
-                    as_a: "1".to_string(),
-                    if_a: "2".to_string(),
-                    as_b: "3".to_string(),
-                    if_b: "1".to_string(),
-                    meta: None,
-                },
-                Link {
-                    as_a: "2".to_string(),
-                    if_a: "2".to_string(),
-                    as_b: "4".to_string(),
-                    if_b: "1".to_string(),
-                    meta: None,
-                },
-                Link {
-                    as_a: "3".to_string(),
-                    if_a: "2".to_string(),
-                    as_b: "4".to_string(),
-                    if_b: "2".to_string(),
-                    meta: None,
-                },
-            ]),
+            paths: vec![
+                vec![link("1", "1", "2", "1"), link("2", "2", "4", "1")],
+                vec![link("1", "3", "2", "3"), link("2", "2", "4", "1")],
+                vec![link("1", "2", "3", "1"), link("3", "2", "4", "2")],
+            ],
             meta: vec![],
+        }
+    }
+
+    fn chosen_path_symbol(idx: i32) -> Symbol {
+        Symbol::create_function(SYMBOL_CHOSEN_PATH, &[Symbol::create_number(idx)], true).unwrap()
+    }
+
+    #[test]
+    fn test_chosen_candidate_returns_selected_path() {
+        let pi = get_simple_instance();
+        let path = chosen_candidate(&pi, vec![chosen_path_symbol(2)]).unwrap();
+        assert_eq!(path, pi.paths[2]);
+    }
+
+    #[test]
+    fn test_chosen_candidate_errors_without_selection() {
+        let pi = get_simple_instance();
+        match chosen_candidate(&pi, vec![]) {
+            Err(ReasonerError::MalformedModel) => {}
+            other => panic!("expected MalformedModel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_chosen_candidate_errors_on_multiple_selections() {
+        let pi = get_simple_instance();
+        match chosen_candidate(&pi, vec![chosen_path_symbol(0), chosen_path_symbol(1)]) {
+            Err(ReasonerError::MalformedModel) => {}
+            other => panic!("expected MalformedModel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_chosen_candidate_errors_on_out_of_range_index() {
+        let pi = get_simple_instance();
+        match chosen_candidate(&pi, vec![chosen_path_symbol(3)]) {
+            Err(ReasonerError::MalformedModel) => {}
+            other => panic!("expected MalformedModel, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_node_metadata_coverage_check() {
+        let mut pi = get_simple_instance();
+        // node "3" deliberately has no avg_psf entry
+        pi.meta = vec![
+            GlobalMetadata {
+                name: "avg_psf".to_string(),
+                subj: Some("1".to_string()),
+                value: MetadataValue::Numerical(5),
+            },
+            GlobalMetadata {
+                name: "avg_psf".to_string(),
+                subj: Some("2".to_string()),
+                value: MetadataValue::Numerical(5),
+            },
+        ];
+
+        let pol = Policy::new(
+            None,
+            None,
+            None,
+            ":- chosen(AS, _, _, _), not has_metadata(\"avg_psf\", AS).".to_string(),
+        )
+        .unwrap();
+
+        match solve(&pi, vec![pol], vec![], None, 10).unwrap() {
+            None => panic!("could not find a path"),
+            Some(paths) => {
+                // only the two candidates through node "2" have full coverage
+                assert_eq!(paths.len(), 2);
+                for path in paths {
+                    for link in path {
+                        assert_ne!(link.as_a, "3");
+                        assert_ne!(link.as_b, "3");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_link_metadata_coverage_check() {
+        let mut pi = get_simple_instance();
+        // only the links of the first candidate carry latency data
+        for link in pi.paths[0].iter_mut() {
+            link.meta = Some(vec![Metadata {
+                name: "latency".to_string(),
+                value: MetadataValue::Numerical(10),
+            }]);
+        }
+
+        let pol = Policy::new(
+            None,
+            None,
+            None,
+            ":- chosen(X, XIF, Y, YIF), not has_metadata(\"latency\", X, XIF, Y, YIF).".to_string(),
+        )
+        .unwrap();
+
+        match solve(&pi, vec![pol], vec![], None, 10).unwrap() {
+            None => panic!("could not find a path"),
+            Some(paths) => {
+                assert_eq!(paths.len(), 1);
+                for path in paths {
+                    assert_eq!(path, pi.paths[0]);
+                }
+            }
         }
     }
 
@@ -571,23 +667,11 @@ mod tests {
         match solve(&pi, vec![], vec![], None, 10).unwrap() {
             None => panic!("could not find a path"),
             Some(paths) => {
-                assert!(!paths.is_empty());
+                // every candidate is viable without policies, and every
+                // returned path is exactly one of the candidates
+                assert_eq!(paths.len(), pi.paths.len());
                 for path in paths {
-                    let link0 = path.first().unwrap();
-                    let link1 = path.get(1).unwrap();
-                    // links are not ordered by the solve function
-                    // TODO(andrea): maybe sort them?
-                    if link0.as_a == "1" && link0.as_b == "2" {
-                        assert_eq!(link1.as_a, "2");
-                    } else if link1.as_a == "1" && link1.as_b == "2" {
-                        assert_eq!(link0.as_a, "2");
-                    } else if link0.as_a == "1" && link0.as_b == "3" {
-                        assert_eq!(link1.as_a, "3");
-                    } else if link1.as_a == "1" && link1.as_b == "3" {
-                        assert_eq!(link0.as_a, "3");
-                    } else {
-                        panic!()
-                    }
+                    assert!(pi.paths.contains(&path));
                 }
             }
         }
@@ -600,9 +684,10 @@ mod tests {
         match solve(&pi, vec![pol], vec![], None, 10).unwrap() {
             None => panic!("could not find a path"),
             Some(paths) => {
-                assert!(!paths.is_empty());
+                // only the candidate through node 3 satisfies the policy
+                assert_eq!(paths.len(), 1);
                 for path in paths {
-                    assert!(!path.is_empty());
+                    assert!(pi.paths.contains(&path));
                     for link in path {
                         assert_ne!(link.as_a, "2");
                         assert_ne!(link.as_b, "2");
@@ -642,11 +727,11 @@ mod tests {
             None,
             None,
             None,
-            "   
-            total_avg_psf(TotAvgPsf) :- 
+            "
+            total_avg_psf(TotAvgPsf) :-
             TotAvgPsf=#sum{AvgPsf: avg_psf(AS, AvgPsf),
             chosen(AS, _, _, _)}.
-            
+
             #maximize { TotAvgPsf: total_avg_psf(TotAvgPsf) }.
             "
             .to_string(),
