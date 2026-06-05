@@ -70,6 +70,9 @@ func parseMetadata(r io.Reader) (*Metadata, error) {
 	if err := json.NewDecoder(r).Decode(&metadata); err != nil {
 		return nil, err
 	}
+	if err := metadata.Validate(); err != nil {
+		return nil, err
+	}
 	return &metadata, nil
 }
 

@@ -1,6 +1,10 @@
 package main
 
 import (
+	"time"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	pb "github.com/marinoandrea/hoppipolla/pkg/proto/nip_proxy/v1"
 	"github.com/marinoandrea/hoppipolla/services/nip-proxy/sources"
 )
@@ -34,6 +38,7 @@ func FromNodeMetadataToPB(input sources.NodeMetadata) *pb.NodeMetadata {
 		ValueBool:   input.ValueBool,
 		ValueInt32:  input.ValueInt32,
 		ValueString: input.ValueString,
+		CollectedAt: toPBTimestamp(input.CollectedAt),
 	}
 }
 
@@ -49,5 +54,13 @@ func FromLinkMetadataToPB(input sources.LinkMetadata) *pb.LinkMetadata {
 		ValueBool:   input.ValueBool,
 		ValueInt32:  input.ValueInt32,
 		ValueString: input.ValueString,
+		CollectedAt: toPBTimestamp(input.CollectedAt),
 	}
+}
+
+func toPBTimestamp(t *time.Time) *timestamppb.Timestamp {
+	if t == nil {
+		return nil
+	}
+	return timestamppb.New(*t)
 }

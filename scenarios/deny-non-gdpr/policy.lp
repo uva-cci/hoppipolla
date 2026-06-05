@@ -1,34 +1,44 @@
-% A policy that denies all AS with border routers operating outside of the 
+% A policy that denies all ASes with border routers operating outside of the
 % GDPR regulated area.
-gdprArea(AS) :- operates(AS, "AT").  % Austria
-gdprArea(AS) :- operates(AS, "BE").  % Belgium
-gdprArea(AS) :- operates(AS, "BG").  % Bulgaria
-gdprArea(AS) :- operates(AS, "HR").  % Croatia
-gdprArea(AS) :- operates(AS, "CY").  % Cyprus
-gdprArea(AS) :- operates(AS, "CZ").  % Czechia
-gdprArea(AS) :- operates(AS, "DK").  % Denmark
-gdprArea(AS) :- operates(AS, "EE").  % Estonia
-gdprArea(AS) :- operates(AS, "FI").  % Finland
-gdprArea(AS) :- operates(AS, "FR").  % France
-gdprArea(AS) :- operates(AS, "DE").  % Germany
-gdprArea(AS) :- operates(AS, "GR").  % Greece
-gdprArea(AS) :- operates(AS, "HU").  % Hungary
-gdprArea(AS) :- operates(AS, "IS").  % Iceland
-gdprArea(AS) :- operates(AS, "IE").  % Ireland
-gdprArea(AS) :- operates(AS, "IT").  % Italy
-gdprArea(AS) :- operates(AS, "LV").  % Latvia
-gdprArea(AS) :- operates(AS, "LI").  % Liechtenstein
-gdprArea(AS) :- operates(AS, "LT").  % Lithuania
-gdprArea(AS) :- operates(AS, "LU").  % Luxembourg
-gdprArea(AS) :- operates(AS, "MT").  % Malta
-gdprArea(AS) :- operates(AS, "NL").  % Netherlands
-gdprArea(AS) :- operates(AS, "NO").  % Norway
-gdprArea(AS) :- operates(AS, "PL").  % Poland
-gdprArea(AS) :- operates(AS, "PT").  % Portugal
-gdprArea(AS) :- operates(AS, "RO").  % Romania
-gdprArea(AS) :- operates(AS, "SK").  % Slovakia
-gdprArea(AS) :- operates(AS, "SI").  % Slovenia
-gdprArea(AS) :- operates(AS, "ES").  % Spain
-gdprArea(AS) :- operates(AS, "SE").  % Sweden
+%
+% Missing metadata is handled explicitly: under ASP's closed-world semantics
+% a node with no geolocation data would otherwise be indistinguishable from
+% a non-compliant one. The has_metadata/2 coverage atoms emitted by the
+% policy manager make the fail-closed behavior a deliberate, separate rule.
 
-:- chosen(AS, _, _, _), not gdprArea(AS).
+gdprArea("AT").  % Austria
+gdprArea("BE").  % Belgium
+gdprArea("BG").  % Bulgaria
+gdprArea("HR").  % Croatia
+gdprArea("CY").  % Cyprus
+gdprArea("CZ").  % Czechia
+gdprArea("DK").  % Denmark
+gdprArea("EE").  % Estonia
+gdprArea("FI").  % Finland
+gdprArea("FR").  % France
+gdprArea("DE").  % Germany
+gdprArea("GR").  % Greece
+gdprArea("HU").  % Hungary
+gdprArea("IS").  % Iceland
+gdprArea("IE").  % Ireland
+gdprArea("IT").  % Italy
+gdprArea("LV").  % Latvia
+gdprArea("LI").  % Liechtenstein
+gdprArea("LT").  % Lithuania
+gdprArea("LU").  % Luxembourg
+gdprArea("MT").  % Malta
+gdprArea("NL").  % Netherlands
+gdprArea("NO").  % Norway
+gdprArea("PL").  % Poland
+gdprArea("PT").  % Portugal
+gdprArea("RO").  % Romania
+gdprArea("SK").  % Slovakia
+gdprArea("SI").  % Slovenia
+gdprArea("ES").  % Spain
+gdprArea("SE").  % Sweden
+
+% deny nodes known to operate anywhere outside the GDPR area
+:- chosen(AS, _, _, _), operates(AS, Country), not gdprArea(Country).
+
+% deny nodes with no geolocation coverage at all (explicit fail-closed)
+:- chosen(AS, _, _, _), not has_metadata("operates", AS).

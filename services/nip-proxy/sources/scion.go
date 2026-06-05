@@ -150,6 +150,8 @@ func (s ScionNipSource) GetMetadata(ctx context.Context, req *pb.GetMetadataRequ
 func (s ScionNipSource) getPathMetadata(ctx context.Context, path snet.Path, ch chan Metadata, wg *sync.WaitGroup) {
 	var out Metadata
 
+	collectedAt := time.Now()
+
 	for i, current_itf := range path.Metadata().Interfaces {
 		if s.config.EnableGeolocation {
 			location := path.Metadata().Geo[i]
@@ -162,7 +164,7 @@ func (s ScionNipSource) getPathMetadata(ctx context.Context, path snet.Path, ch 
 			}
 
 			if len(geocode) > 0 {
-				countries := make([]string, len(geocode))
+				countries := make([]string, 0, len(geocode[0].AddressComponents))
 				for _, addrComp := range geocode[0].AddressComponents {
 					for _, addrCompType := range addrComp.Types {
 						if addrCompType == "country" {
@@ -175,6 +177,7 @@ func (s ScionNipSource) getPathMetadata(ctx context.Context, path snet.Path, ch 
 						Name:        "operates",
 						Node:        current_itf.IA.String(),
 						ValueString: &country,
+						CollectedAt: &collectedAt,
 					})
 				}
 			}
@@ -198,14 +201,16 @@ func (s ScionNipSource) getPathMetadata(ctx context.Context, path snet.Path, ch 
 		latency := int32(min(max(int64(path.Metadata().Latency[i]), math.MinInt32), math.MaxInt32)) // #nosec G115 -- clamped to int32 range above
 
 		out.LinkInfo = append(out.LinkInfo, LinkMetadata{
-			Name:       "bandwidth",
-			Link:       link,
-			ValueInt32: &bandwidth,
+			Name:        "bandwidth",
+			Link:        link,
+			ValueInt32:  &bandwidth,
+			CollectedAt: &collectedAt,
 		})
 		out.LinkInfo = append(out.LinkInfo, LinkMetadata{
-			Name:       "latency",
-			Link:       link,
-			ValueInt32: &latency,
+			Name:        "latency",
+			Link:        link,
+			ValueInt32:  &latency,
+			CollectedAt: &collectedAt,
 		})
 	}
 
