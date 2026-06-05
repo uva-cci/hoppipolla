@@ -3,63 +3,74 @@ package sources
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"io"
 	"os"
+	"path/filepath"
 
 	pb "github.com/marinoandrea/hoppipolla/pkg/proto/nip_proxy/v1"
 )
 
-type LocalNipSourceConfig struct{}
+const defaultDataDir = "/var/lib/hoppipolla/data"
+
+type LocalNipSourceConfig struct {
+	// Directory containing the metadata entry files.
+	// Defaults to defaultDataDir when empty.
+	Path string
+}
 
 // Local metadata source for mocks and manually recorded data
 type LocalNipSource struct {
-	isInit   bool
 	config   LocalNipSourceConfig
 	metadata *Metadata
 }
 
 func NewLocalNipSource(cfg LocalNipSourceConfig) *LocalNipSource {
+	if cfg.Path == "" {
+		cfg.Path = defaultDataDir
+	}
 	return &LocalNipSource{config: cfg}
 }
 
 func (s *LocalNipSource) Init(ctx context.Context) error {
-	entries, err := os.ReadDir("/var/lib/hoppipolla/data")
+	entries, err := os.ReadDir(s.config.Path)
 	if err != nil {
 		return err
 	}
 
 	metadatas := make([]*Metadata, 0)
 	for _, entry := range entries {
-		var metadata Metadata
-
-		f, err := os.Open("/var/lib/hoppipolla/data/" + entry.Name())
-		if err != nil {
-			return err
-		}
-		stats, err := f.Stat()
-		if err != nil {
-			return err
-		}
-
-		buf := make([]byte, stats.Size())
-		_, err = f.Read(buf)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		err = json.Unmarshal(buf, &metadata)
-		if err != nil {
-			log.Printf("ERROR: failed to parse file '%s'\n", f.Name())
+		if entry.IsDir() {
 			continue
 		}
 
-		metadatas = append(metadatas, &metadata)
+		// #nosec G304 -- path comes from operator config, not request input
+		f, err := os.Open(filepath.Join(s.config.Path, entry.Name()))
+		if err != nil {
+			return err
+		}
+
+		metadata, err := parseMetadata(f)
+		if closeErr := f.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			return err
+		}
+
+		metadatas = append(metadatas, metadata)
 	}
 
 	s.metadata = MergeMetadata(metadatas)
 
 	return nil
+}
+
+func parseMetadata(r io.Reader) (*Metadata, error) {
+	var metadata Metadata
+	if err := json.NewDecoder(r).Decode(&metadata); err != nil {
+		return nil, err
+	}
+	return &metadata, nil
 }
 
 func (s LocalNipSource) Close(ctx context.Context) error {

@@ -3,6 +3,7 @@ package sources
 import (
 	"context"
 	"log"
+	"math"
 	"sync"
 	"time"
 
@@ -34,7 +35,6 @@ type ScionCacheValue struct {
 // Metadata source leveraging SCION beacon metadata and
 // optional Google reverse geolocation
 type ScionNipSource struct {
-	isInit             bool
 	config             ScionNipSourceConfig
 	daemon             *daemon.Service
 	conn               daemon.Connector
@@ -134,7 +134,7 @@ func (s ScionNipSource) GetMetadata(ctx context.Context, req *pb.GetMetadataRequ
 
 	for _, path := range paths {
 		wg.Add(1)
-		go s.getPathMetadata(path, ch, &wg)
+		go s.getPathMetadata(ctx, path, ch, &wg)
 	}
 
 	wg.Wait()
@@ -147,13 +147,13 @@ func (s ScionNipSource) GetMetadata(ctx context.Context, req *pb.GetMetadataRequ
 	return MergeMetadata(out), nil
 }
 
-func (s ScionNipSource) getPathMetadata(path snet.Path, ch chan Metadata, wg *sync.WaitGroup) {
+func (s ScionNipSource) getPathMetadata(ctx context.Context, path snet.Path, ch chan Metadata, wg *sync.WaitGroup) {
 	var out Metadata
 
 	for i, current_itf := range path.Metadata().Interfaces {
 		if s.config.EnableGeolocation {
 			location := path.Metadata().Geo[i]
-			geocode, err := s.googleMapsClient.ReverseGeocode(context.TODO(), &maps.GeocodingRequest{
+			geocode, err := s.googleMapsClient.ReverseGeocode(ctx, &maps.GeocodingRequest{
 				LatLng: &maps.LatLng{
 					Lat: float64(location.Latitude),
 					Lng: float64(location.Longitude)}})
@@ -192,10 +192,10 @@ func (s ScionNipSource) getPathMetadata(path snet.Path, ch chan Metadata, wg *sy
 			IfB: next_itf.ID.String(),
 		}
 
-		// FIXME: these should never overflow with realistic data,
-		// however, our reasoner only supports 32-bit integers
-		bandwidth := int32(path.Metadata().Bandwidth[i])
-		latency := int32(path.Metadata().Latency[i])
+		// NOTE: our reasoner only supports 32-bit integers, so we saturate
+		// instead of overflowing; this should never trigger with realistic data
+		bandwidth := int32(min(path.Metadata().Bandwidth[i], math.MaxInt32))                        // #nosec G115 -- clamped to int32 range above
+		latency := int32(min(max(int64(path.Metadata().Latency[i]), math.MinInt32), math.MaxInt32)) // #nosec G115 -- clamped to int32 range above
 
 		out.LinkInfo = append(out.LinkInfo, LinkMetadata{
 			Name:       "bandwidth",

@@ -103,7 +103,11 @@ func main() {
 	if err := server.init(context.Background()); err != nil {
 		log.Fatalf("failed to initialize server: %v", err)
 	}
-	defer server.shutdown(context.Background())
+	defer func() {
+		if err := server.shutdown(context.Background()); err != nil {
+			log.Printf("ERROR: failed to shutdown server: %v", err)
+		}
+	}()
 	log.Println("Initialized service")
 
 	lis, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", server.config.Port))
