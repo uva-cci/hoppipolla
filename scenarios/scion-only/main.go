@@ -9,7 +9,6 @@ import (
 	"github.com/scionproto/scion/pkg/snet"
 )
 
-var policy string
 var results []snet.Path
 
 var scionDaemon *daemon.Service
@@ -51,5 +50,7 @@ func setup() {
 }
 
 func clean() {
-	scionDaemonConn.Close()
+	if err := scionDaemonConn.Close(); err != nil {
+		log.Println("ERROR: failed to close daemon connection:", err)
+	}
 }

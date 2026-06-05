@@ -7,37 +7,37 @@ import (
 )
 
 type Link struct {
-	AsA string
-	IfA string
-	AsB string
-	IfB string
+	AsA string `json:"as_a"`
+	IfA string `json:"if_a"`
+	AsB string `json:"as_b"`
+	IfB string `json:"if_b"`
 }
 
 type MetadataRequest struct {
-	Src      string
-	Dst      string
-	Topology []*Link
+	Src      string  `json:"src"`
+	Dst      string  `json:"dst"`
+	Topology []*Link `json:"topology"`
 }
 
 type LinkMetadata struct {
-	Name        string
-	Link        Link
-	ValueBool   *bool
-	ValueInt32  *int32
-	ValueString *string
+	Name        string  `json:"name"`
+	Link        Link    `json:"link"`
+	ValueBool   *bool   `json:"value_bool"`
+	ValueInt32  *int32  `json:"value_int32"`
+	ValueString *string `json:"value_string"`
 }
 
 type NodeMetadata struct {
-	Name        string
-	Node        string
-	ValueBool   *bool
-	ValueInt32  *int32
-	ValueString *string
+	Name        string  `json:"name"`
+	Node        string  `json:"node"`
+	ValueBool   *bool   `json:"value_bool"`
+	ValueInt32  *int32  `json:"value_int32"`
+	ValueString *string `json:"value_string"`
 }
 
 type Metadata struct {
-	LinkInfo []LinkMetadata
-	NodeInfo []NodeMetadata
+	LinkInfo []LinkMetadata `json:"link_info"`
+	NodeInfo []NodeMetadata `json:"node_info"`
 }
 
 // Represents a Network Information Plane (NIP) data source.
@@ -52,12 +52,8 @@ type NipSource interface {
 func MergeMetadata(ress []*Metadata) *Metadata {
 	var out Metadata
 	for _, res := range ress {
-		for _, nodeInfo := range res.NodeInfo {
-			out.NodeInfo = append(out.NodeInfo, nodeInfo)
-		}
-		for _, linkInfo := range res.LinkInfo {
-			out.LinkInfo = append(out.LinkInfo, linkInfo)
-		}
+		out.NodeInfo = append(out.NodeInfo, res.NodeInfo...)
+		out.LinkInfo = append(out.LinkInfo, res.LinkInfo...)
 	}
 	return &out
 }
